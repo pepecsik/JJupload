@@ -273,13 +273,14 @@ footer p { margin: 0; font-size: 12.5px; color: var(--muted); line-height: 1.6; 
       </div>
 
       <button type="submit" id="submitBtn">Versturen</button>
+      <p class="error-msg" style="color:var(--muted);">Let op: een video versturen kan een paar minuten duren. Blijf op deze pagina tot je "Bedankt!" ziet.</p>
     </form>
   </main>
 
   <main class="card" id="uploadingCard" hidden>
     <p class="success-title" style="margin-bottom:16px;">Bezig met versturen…</p>
     <div class="progress-list" id="progressList"></div>
-    <p class="uploading-note">Blijf op deze pagina tot het klaar is — niet naar een andere app wisselen, anders kan de upload onderbroken worden.</p>
+    <p class="uploading-note">Blijf op deze pagina — ga nu niet naar een andere app, anders stopt de upload.</p>
   </main>
 
   <main class="card" id="successCard" hidden>
@@ -337,36 +338,64 @@ footer p { margin: 0; font-size: 12.5px; color: var(--muted); line-height: 1.6; 
 
   var selectedFiles = [];
 
+  // Resume state for the current batch of selectedFiles: uploadState[i] is
+  // { chunkIndex, result } -- how far file i got last time, and its final
+  // {fileId, size} once finalized. Persists across a failed attempt and a
+  // "Probeer opnieuw" so a retry picks up where it left off instead of
+  // resending everything -- the whole point, since boomers hitting retry
+  // need the SECOND attempt to be fast, not another full multi-minute wait.
+  // Reset (along with sessionId) whenever the actual file selection changes.
+  var sessionId = null;
+  var uploadState = [];
+  function resetUploadState() {
+    sessionId = null;
+    uploadState = [];
+  }
+
   // ---- Backend config -------------------------------------------------
   var SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbyXQDVmgC9OkS1wXp0mC7c3uPGdHypcN6yGZc_-LVSS_fIpnWhHsbi1w8xBK-aAgs7FZw/exec';
-  var CHUNK_SIZE = 3 * 1024 * 1024; // 3MB raw per chunk -- smaller/faster round-trips survive flaky mobile connections better
+  var CHUNK_SIZE = 3 * 1024 * 1024; // 3MB raw per chunk -- safely under Apps Script's request-size limit once base64-encoded
 
   // Mobile browsers routinely suspend a backgrounded tab's network activity,
-  // which kills an in-progress fetch with a generic "Failed to fetch" --
-  // indistinguishable from a real network error. Tracked here so the error
-  // screen can tell people what actually happened instead of guessing.
+  // which kills an in-progress request with a generic network error --
+  // indistinguishable from a real connectivity problem. Tracked here so the
+  // error screen can tell people what actually happened instead of guessing.
   var wasBackgrounded = false;
   document.addEventListener('visibilitychange', function () {
     if (document.hidden) wasBackgrounded = true;
   });
 
-  function postJson(payload, attemptsLeft) {
+  // XHR instead of fetch() specifically so onUploadProgress can report real,
+  // continuous progress WHILE a chunk is still transferring -- fetch only
+  // ever resolves once the whole round trip is done, which is exactly why
+  // the bar used to sit still for the entire length of a slow chunk upload
+  // and look frozen on a weak mobile connection.
+  function postJson(payload, onUploadProgress, attemptsLeft) {
     attemptsLeft = attemptsLeft == null ? 5 : attemptsLeft;
-    return fetch(SCRIPT_URL, {
-      method: 'POST',
+    return new Promise(function (resolve, reject) {
+      var xhr = new XMLHttpRequest();
+      xhr.open('POST', SCRIPT_URL, true);
       // text/plain (not application/json) so the browser never sends a
       // CORS preflight -- Apps Script web apps can't answer one.
-      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify(payload),
-    }).then(function (res) {
-      if (!res.ok) throw new Error('HTTP ' + res.status);
-      return res.json();
+      xhr.setRequestHeader('Content-Type', 'text/plain;charset=utf-8');
+      if (onUploadProgress) {
+        xhr.upload.onprogress = function (e) {
+          if (e.lengthComputable) onUploadProgress(e.loaded / e.total);
+        };
+      }
+      xhr.onload = function () {
+        if (xhr.status < 200 || xhr.status >= 300) { reject(new Error('HTTP ' + xhr.status)); return; }
+        try { resolve(JSON.parse(xhr.responseText)); }
+        catch (err) { reject(new Error('Ongeldig antwoord van de server')); }
+      };
+      xhr.onerror = function () { reject(new Error('Netwerkfout')); };
+      xhr.send(JSON.stringify(payload));
     }).catch(function (err) {
       if (attemptsLeft > 1) {
         var retryNumber = 5 - attemptsLeft + 1; // 1st retry, 2nd retry, ...
         var delay = Math.min(6400, 400 * Math.pow(2, retryNumber));
         return new Promise(function (resolve) { setTimeout(resolve, delay); })
-          .then(function () { return postJson(payload, attemptsLeft - 1); });
+          .then(function () { return postJson(payload, onUploadProgress, attemptsLeft - 1); });
       }
       throw err;
     });
@@ -392,10 +421,14 @@ footer p { margin: 0; font-size: 12.5px; color: var(--muted); line-height: 1.6; 
   }
 
   // Uploads one file in sequential chunks, then finalizes it server-side.
-  // onProgress gets a 0..1 fraction as each chunk lands.
-  function uploadOneFile(file, uploaderName, sessionId, fileIndex, onProgress) {
+  // Starts at startChunkIndex (not always 0) so a retry can resume instead
+  // of resending chunks the server already has. onChunkDone(newIndex) lets
+  // the caller persist progress as each chunk actually lands. onProgress
+  // gets a smooth 0..1 fraction, updated continuously mid-chunk too (via
+  // the XHR upload progress event), not just once per completed chunk.
+  function uploadOneFile(file, uploaderName, sessionId, fileIndex, startChunkIndex, onProgress, onChunkDone) {
     var totalChunks = Math.max(1, Math.ceil(file.size / CHUNK_SIZE));
-    var chunkIndex = 0;
+    var chunkIndex = startChunkIndex || 0;
 
     function sendNext() {
       if (chunkIndex >= totalChunks) {
@@ -403,7 +436,7 @@ footer p { margin: 0; font-size: 12.5px; color: var(--muted); line-height: 1.6; 
           action: 'finalize', sessionId: sessionId, fileIndex: fileIndex,
           uploaderName: uploaderName, fileName: file.name,
           mimeType: file.type || 'video/mp4', totalChunks: totalChunks,
-        }).then(function (resp) {
+        }, null).then(function (resp) {
           if (!resp || !resp.ok) throw new Error((resp && resp.error) || 'Samenvoegen mislukt');
           return { fileId: resp.fileId, size: resp.size, fileName: file.name };
         });
@@ -415,11 +448,14 @@ footer p { margin: 0; font-size: 12.5px; color: var(--muted); line-height: 1.6; 
           action: 'chunk', sessionId: sessionId, fileIndex: fileIndex,
           chunkIndex: chunkIndex, totalChunks: totalChunks,
           data: arrayBufferToBase64(buffer),
+        }, function (subFraction) {
+          onProgress((chunkIndex + subFraction) / totalChunks);
         });
       }).then(function (resp) {
         if (!resp || !resp.ok) throw new Error((resp && resp.error) || 'Versturen van een deel mislukt');
         chunkIndex++;
         onProgress(chunkIndex / totalChunks);
+        if (onChunkDone) onChunkDone(chunkIndex);
         return sendNext();
       });
     }
@@ -451,6 +487,7 @@ footer p { margin: 0; font-size: 12.5px; color: var(--muted); line-height: 1.6; 
       li.querySelector('.f-size').textContent = formatSize(file.size);
       li.querySelector('.f-remove').addEventListener('click', function () {
         selectedFiles.splice(idx, 1);
+        resetUploadState(); // indices shifted -- any previous resume progress no longer matches
         renderFileList();
       });
       fileListEl.appendChild(li);
@@ -462,11 +499,13 @@ footer p { margin: 0; font-size: 12.5px; color: var(--muted); line-height: 1.6; 
     incoming.forEach(function (f) { selectedFiles.push(f); });
     fileInput.value = '';
     fileError.hidden = true;
+    resetUploadState(); // file selection changed -- any previous resume progress no longer applies
     renderFileList();
   });
 
   function resetForm() {
     selectedFiles = [];
+    resetUploadState();
     nameInput.value = '';
     renderFileList();
     nameError.hidden = true;
@@ -514,20 +553,23 @@ footer p { margin: 0; font-size: 12.5px; color: var(--muted); line-height: 1.6; 
     uploadingCard.hidden = false;
     wasBackgrounded = false;
 
+    if (!sessionId) sessionId = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+
     progressList.innerHTML = '';
     var filesToUpload = selectedFiles.slice();
-    var rows = filesToUpload.map(function (file) {
+    var rows = filesToUpload.map(function (file, i) {
+      var totalChunks = Math.max(1, Math.ceil(file.size / CHUNK_SIZE));
+      var state = uploadState[i];
+      var startPct = state ? Math.round(((state.chunkIndex || 0) / totalChunks) * 100) : 0;
       var row = document.createElement('div');
       row.className = 'progress-row';
       row.innerHTML =
-        '<div class="p-top"><span class="p-name"></span><span class="p-pct">0%</span></div>' +
-        '<div class="progress-track"><div class="progress-fill"></div></div>';
+        '<div class="p-top"><span class="p-name"></span><span class="p-pct">' + startPct + '%</span></div>' +
+        '<div class="progress-track"><div class="progress-fill" style="width:' + startPct + '%"></div></div>';
       row.querySelector('.p-name').textContent = file.name;
       progressList.appendChild(row);
       return row;
     });
-
-    var sessionId = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 
     function setRowProgress(i, fraction) {
       var pct = Math.round(fraction * 100);
@@ -536,13 +578,25 @@ footer p { margin: 0; font-size: 12.5px; color: var(--muted); line-height: 1.6; 
     }
 
     // One file at a time -- simpler and more reliable on a flaky mobile
-    // connection than firing them all off in parallel.
+    // connection than firing them all off in parallel. A file already
+    // finalized on a previous attempt (uploadState[i].result) is reused
+    // straight away instead of being sent again.
     var results = [];
     var chain = Promise.resolve();
     filesToUpload.forEach(function (file, i) {
       chain = chain.then(function () {
-        return uploadOneFile(file, name, sessionId, i, function (fraction) {
+        if (uploadState[i] && uploadState[i].result) {
+          setRowProgress(i, 1);
+          return uploadState[i].result;
+        }
+        if (!uploadState[i]) uploadState[i] = { chunkIndex: 0, result: null };
+        return uploadOneFile(file, name, sessionId, i, uploadState[i].chunkIndex, function (fraction) {
           setRowProgress(i, fraction);
+        }, function (newChunkIndex) {
+          uploadState[i].chunkIndex = newChunkIndex;
+        }).then(function (result) {
+          uploadState[i].result = result;
+          return result;
         });
       }).then(function (result) {
         results.push(result);
