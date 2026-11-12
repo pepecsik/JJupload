@@ -1,0 +1,594 @@
+<!doctype html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>JJupload</title>
+<style>
+/* Layout: one centered card on a warm cream page. Ornamental ruby/gold
+   frame up top holds a monogram placeholder until the real photo arrives.
+   Form becomes a success state in place; no scrolling required at rest. */
+:root {
+  --bg: #faf5ec;
+  --surface: #ffffff;
+  --surface-2: #fbf2e4;
+  --ink: #2b1016;
+  --ink-soft: #6b4a4f;
+  --ruby: #9a1f32;
+  --ruby-deep: #6e1522;
+  --gold: #b9933f;
+  --gold-soft: #e7d6ac;
+  --muted: #8a7a6e;
+  --border: #e9ddc8;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #241014;
+    --surface: #341720;
+    --surface-2: #3c1b23;
+    --ink: #f6ece2;
+    --ink-soft: #d8b9bd;
+    --ruby: #d85a6e;
+    --ruby-deep: #c13f55;
+    --gold: #d8b96b;
+    --gold-soft: #5a4327;
+    --muted: #b79a94;
+    --border: #4a2a30;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #241014;
+  --surface: #341720;
+  --surface-2: #3c1b23;
+  --ink: #f6ece2;
+  --ink-soft: #d8b9bd;
+  --ruby: #d85a6e;
+  --ruby-deep: #c13f55;
+  --gold: #d8b96b;
+  --gold-soft: #5a4327;
+  --muted: #b79a94;
+  --border: #4a2a30;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: 'Inter', system-ui, sans-serif;
+  padding-top: env(safe-area-inset-top, 0px);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+.page {
+  max-width: 480px;
+  margin: 0 auto;
+  padding-left: max(20px, env(safe-area-inset-left, 0px));
+  padding-right: max(20px, env(safe-area-inset-right, 0px));
+  padding-block: 28px 48px;
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+
+/* Hero */
+.hero { text-align: center; display: flex; flex-direction: column; align-items: center; gap: 10px; }
+.frame-wrap { width: 148px; aspect-ratio: 3/4; margin-bottom: 4px; }
+.eyebrow {
+  margin: 0;
+  font-size: 12px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--gold);
+  font-weight: 600;
+}
+h1 {
+  font-family: 'Playfair Display', Georgia, serif;
+  font-size: clamp(32px, 9vw, 42px);
+  line-height: 1.08;
+  margin: 0;
+  color: var(--ruby);
+  text-wrap: balance;
+}
+h1 .amp { color: var(--gold); font-style: italic; }
+.tagline {
+  margin: 0;
+  font-family: 'Playfair Display', Georgia, serif;
+  font-style: italic;
+  font-size: 19px;
+  color: var(--ink-soft);
+}
+
+/* Cards */
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  padding: 24px 22px;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+}
+.intro {
+  margin: 0 0 20px;
+  font-size: 14.5px;
+  line-height: 1.55;
+  color: var(--ink-soft);
+}
+
+form { display: flex; flex-direction: column; gap: 18px; }
+label.field-label {
+  display: block;
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--ink);
+  margin-bottom: 7px;
+}
+input[type="text"] {
+  width: 100%;
+  font-size: 16px;
+  font-family: inherit;
+  color: var(--ink);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 13px 14px;
+}
+input[type="text"]:focus { outline: 2px solid var(--gold); outline-offset: 1px; }
+input[type="text"]::placeholder { color: var(--muted); }
+
+.file-drop {
+  position: relative;
+  border: 1.5px dashed var(--border);
+  border-radius: 12px;
+  background: var(--surface-2);
+  padding: 20px 14px;
+  text-align: center;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+.file-drop.has-files { border-style: solid; border-color: var(--gold); }
+.file-drop input[type="file"] {
+  position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; height: 100%;
+}
+.file-drop-inner { display: flex; flex-direction: column; align-items: center; gap: 6px; pointer-events: none; }
+.file-drop-icon { font-size: 26px; }
+.file-drop-text { font-size: 14px; font-weight: 600; color: var(--ink); }
+.file-drop-sub { display: block; font-size: 12.5px; font-weight: 400; color: var(--muted); margin-top: 2px; }
+
+.file-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.file-list li {
+  display: flex; align-items: center; gap: 10px;
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px;
+  padding: 9px 12px; font-size: 13px;
+}
+.file-list .f-icon { font-size: 15px; }
+.file-list .f-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.file-list .f-size { color: var(--muted); font-size: 12px; flex-shrink: 0; font-variant-numeric: tabular-nums; }
+.file-list .f-remove {
+  flex-shrink: 0; border: none; background: none; color: var(--muted); font-size: 16px;
+  line-height: 1; cursor: pointer; padding: 2px 4px;
+}
+.file-list .f-remove:hover { color: var(--ruby); }
+
+button[type="submit"], .btn-primary {
+  appearance: none; border: none; cursor: pointer;
+  background: var(--ruby); color: #fdf4ee;
+  font-family: inherit; font-size: 15.5px; font-weight: 700;
+  padding: 14px 18px; border-radius: 10px;
+  letter-spacing: 0.01em;
+  transition: background 0.15s ease, transform 0.1s ease;
+}
+button[type="submit"]:disabled { background: var(--muted); cursor: not-allowed; }
+button[type="submit"]:not(:disabled):active { transform: scale(0.98); }
+.btn-secondary {
+  appearance: none; border: 1px solid var(--border); background: transparent; color: var(--ink);
+  font-family: inherit; font-size: 14px; font-weight: 600; padding: 11px 16px; border-radius: 10px; cursor: pointer;
+}
+
+.error-msg { font-size: 12.5px; color: var(--ruby); margin: -6px 0 0; }
+
+/* Uploading state */
+.progress-list { display: flex; flex-direction: column; gap: 10px; }
+.progress-row { display: flex; flex-direction: column; gap: 5px; }
+.progress-row .p-top { display: flex; justify-content: space-between; font-size: 12.5px; color: var(--ink-soft); gap: 8px; }
+.progress-row .p-top .p-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.progress-track { height: 6px; border-radius: 4px; background: var(--surface-2); overflow: hidden; }
+.progress-fill { height: 100%; background: var(--gold); width: 0%; border-radius: 4px; transition: width 0.25s ease; }
+.uploading-note { margin: 16px 0 0; font-size: 13px; color: var(--muted); text-align: center; }
+
+/* Success state */
+.success-icon { font-size: 40px; text-align: center; margin-bottom: 4px; }
+.success-title { font-family: 'Playfair Display', Georgia, serif; font-size: 22px; text-align: center; margin: 0 0 8px; color: var(--ruby); }
+.success-body { font-size: 14px; color: var(--ink-soft); text-align: center; margin: 0 0 18px; line-height: 1.5; }
+.verify-row {
+  display: flex; align-items: center; gap: 9px;
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px;
+  padding: 11px 13px; font-size: 13px; color: var(--ink-soft);
+  opacity: 0; transform: translateY(4px);
+  transition: opacity 0.35s ease, transform 0.35s ease;
+}
+.verify-row.shown { opacity: 1; transform: translateY(0); }
+.verify-row .v-spinner {
+  width: 14px; height: 14px; border-radius: 50%;
+  border: 2px solid var(--border); border-top-color: var(--gold);
+  flex-shrink: 0; animation: spin 0.8s linear infinite;
+}
+.verify-row .v-icon { font-weight: 700; flex-shrink: 0; }
+.verify-row .v-icon.ok { color: var(--gold); }
+.verify-row .v-icon.fail { color: var(--ruby); }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .v-spinner { animation: none; }
+}
+
+.success-actions { margin-top: 18px; display: flex; justify-content: center; }
+
+footer { text-align: center; }
+footer p { margin: 0; font-size: 12.5px; color: var(--muted); line-height: 1.6; }
+
+[hidden] { display: none !important; }
+</style>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,600;0,700;1,600&family=Inter:wght@400;500;600;700&display=swap">
+</head>
+<body>
+
+<div class="page">
+  <header class="hero">
+    <div class="frame-wrap" aria-hidden="true">
+      <svg viewBox="0 0 150 200" width="100%" height="100%" role="img" aria-label="Plek voor een foto van Joost en Jenneke">
+        <rect x="4" y="4" width="142" height="192" rx="4" fill="var(--surface-2)" stroke="var(--gold)" stroke-width="2"/>
+        <rect x="14" y="14" width="122" height="172" rx="2" fill="none" stroke="var(--gold-soft)" stroke-width="1"/>
+        <text x="75" y="98" text-anchor="middle" font-family="Playfair Display, Georgia, serif" font-style="italic" font-size="30" fill="var(--ruby)">J&amp;J</text>
+        <text x="75" y="160" text-anchor="middle" font-family="Inter, sans-serif" font-size="9.5" letter-spacing="0.5" fill="var(--muted)">FOTO VOLGT</text>
+      </svg>
+    </div>
+    <p class="eyebrow">Robijnen bruiloft</p>
+    <h1>Joost <span class="amp">&amp;</span> Jenneke</h1>
+    <p class="tagline">40 jaar getrouwd!</p>
+  </header>
+
+  <main class="card" id="formCard">
+    <p class="intro">Deel een herinnering, een felicitatie of gewoon een gekke boodschap op video. Alle filmpjes samen worden één mooie verrassingsfilm voor Joost en Jenneke.</p>
+
+    <form id="uploadForm" novalidate>
+      <div>
+        <label class="field-label" for="nameInput">Jouw naam</label>
+        <input id="nameInput" name="name" type="text" placeholder="Bijv. Joost de Vries" autocomplete="name">
+        <p class="error-msg" id="nameError" hidden>Vul je naam in, zodat we weten van wie dit filmpje is.</p>
+      </div>
+
+      <div>
+        <label class="field-label" for="fileInput">Video's uploaden</label>
+        <div class="file-drop" id="fileDrop">
+          <input id="fileInput" name="videos" type="file" accept="video/*" multiple>
+          <div class="file-drop-inner">
+            <span class="file-drop-icon">🎥</span>
+            <span class="file-drop-text">Tik om je video's te kiezen<span class="file-drop-sub">Je mag er meerdere selecteren</span></span>
+          </div>
+        </div>
+        <ul class="file-list" id="fileList" hidden></ul>
+        <p class="error-msg" id="fileError" hidden>Kies minstens één video om te versturen.</p>
+      </div>
+
+      <button type="submit" id="submitBtn">Versturen</button>
+    </form>
+  </main>
+
+  <main class="card" id="uploadingCard" hidden>
+    <p class="success-title" style="margin-bottom:16px;">Bezig met versturen…</p>
+    <div class="progress-list" id="progressList"></div>
+    <p class="uploading-note">Even geduld, dit kan bij grote video's een paar minuten duren.</p>
+  </main>
+
+  <main class="card" id="successCard" hidden>
+    <div class="success-icon">🎉</div>
+    <p class="success-title">Bedankt!</p>
+    <p class="success-body" id="successBody">Je video is ontvangen. Joost en Jenneke gaan hier heel blij van worden.</p>
+    <div class="verify-row" id="verifyRow">
+      <span class="v-spinner" id="verifySpinner"></span>
+      <span class="v-icon" id="verifyIcon" hidden></span>
+      <span id="verifyText">We controleren of alles goed is opgeslagen…</span>
+    </div>
+    <div class="success-actions">
+      <button type="button" class="btn-secondary" id="resetBtn">Nog een video versturen</button>
+    </div>
+  </main>
+
+  <main class="card" id="errorCard" hidden>
+    <div class="success-icon">⚠️</div>
+    <p class="success-title">Dat ging niet goed</p>
+    <p class="success-body" id="errorBody">Er ging iets mis bij het versturen. Probeer het nog eens — je naam en video's staan nog klaar.</p>
+    <div class="success-actions">
+      <button type="button" class="btn-primary" id="retryBtn" style="width:100%;">Probeer opnieuw</button>
+    </div>
+  </main>
+
+  <footer>
+    <p>Dit filmpje wordt alleen gebruikt voor het verrassingsfilmpje van Joost &amp; Jenneke.</p>
+  </footer>
+</div>
+
+<script>
+(function () {
+  var form = document.getElementById('uploadForm');
+  var nameInput = document.getElementById('nameInput');
+  var fileInput = document.getElementById('fileInput');
+  var fileDrop = document.getElementById('fileDrop');
+  var fileListEl = document.getElementById('fileList');
+  var nameError = document.getElementById('nameError');
+  var fileError = document.getElementById('fileError');
+  var submitBtn = document.getElementById('submitBtn');
+
+  var formCard = document.getElementById('formCard');
+  var uploadingCard = document.getElementById('uploadingCard');
+  var successCard = document.getElementById('successCard');
+  var errorCard = document.getElementById('errorCard');
+  var errorBody = document.getElementById('errorBody');
+  var retryBtn = document.getElementById('retryBtn');
+  var progressList = document.getElementById('progressList');
+  var successBody = document.getElementById('successBody');
+  var verifyRow = document.getElementById('verifyRow');
+  var verifySpinner = document.getElementById('verifySpinner');
+  var verifyIcon = document.getElementById('verifyIcon');
+  var verifyText = document.getElementById('verifyText');
+  var resetBtn = document.getElementById('resetBtn');
+
+  var selectedFiles = [];
+
+  // ---- Backend config -------------------------------------------------
+  var SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbyXQDVmgC9OkS1wXp0mC7c3uPGdHypcN6yGZc_-LVSS_fIpnWhHsbi1w8xBK-aAgs7FZw/exec';
+  var CHUNK_SIZE = 6 * 1024 * 1024; // 6MB raw per chunk, safely under Apps Script's request-size limit once base64-encoded
+
+  function postJson(payload, attemptsLeft) {
+    attemptsLeft = attemptsLeft == null ? 3 : attemptsLeft;
+    return fetch(SCRIPT_URL, {
+      method: 'POST',
+      // text/plain (not application/json) so the browser never sends a
+      // CORS preflight -- Apps Script web apps can't answer one.
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify(payload),
+    }).then(function (res) {
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      return res.json();
+    }).catch(function (err) {
+      if (attemptsLeft > 1) {
+        return new Promise(function (resolve) { setTimeout(resolve, 800); })
+          .then(function () { return postJson(payload, attemptsLeft - 1); });
+      }
+      throw err;
+    });
+  }
+
+  function arrayBufferToBase64(buffer) {
+    var bytes = new Uint8Array(buffer);
+    var binary = '';
+    var step = 0x8000;
+    for (var i = 0; i < bytes.length; i += step) {
+      binary += String.fromCharCode.apply(null, bytes.subarray(i, i + step));
+    }
+    return btoa(binary);
+  }
+
+  function readSlice(file, start, end) {
+    return new Promise(function (resolve, reject) {
+      var reader = new FileReader();
+      reader.onload = function () { resolve(reader.result); };
+      reader.onerror = function () { reject(new Error('Kan bestand niet lezen')); };
+      reader.readAsArrayBuffer(file.slice(start, end));
+    });
+  }
+
+  // Uploads one file in sequential chunks, then finalizes it server-side.
+  // onProgress gets a 0..1 fraction as each chunk lands.
+  function uploadOneFile(file, uploaderName, sessionId, fileIndex, onProgress) {
+    var totalChunks = Math.max(1, Math.ceil(file.size / CHUNK_SIZE));
+    var chunkIndex = 0;
+
+    function sendNext() {
+      if (chunkIndex >= totalChunks) {
+        return postJson({
+          action: 'finalize', sessionId: sessionId, fileIndex: fileIndex,
+          uploaderName: uploaderName, fileName: file.name,
+          mimeType: file.type || 'video/mp4', totalChunks: totalChunks,
+        }).then(function (resp) {
+          if (!resp || !resp.ok) throw new Error((resp && resp.error) || 'Samenvoegen mislukt');
+          return { fileId: resp.fileId, size: resp.size, fileName: file.name };
+        });
+      }
+      var start = chunkIndex * CHUNK_SIZE;
+      var end = Math.min(file.size, start + CHUNK_SIZE);
+      return readSlice(file, start, end).then(function (buffer) {
+        return postJson({
+          action: 'chunk', sessionId: sessionId, fileIndex: fileIndex,
+          chunkIndex: chunkIndex, totalChunks: totalChunks,
+          data: arrayBufferToBase64(buffer),
+        });
+      }).then(function (resp) {
+        if (!resp || !resp.ok) throw new Error((resp && resp.error) || 'Versturen van een deel mislukt');
+        chunkIndex++;
+        onProgress(chunkIndex / totalChunks);
+        return sendNext();
+      });
+    }
+    return sendNext();
+  }
+
+  function formatSize(bytes) {
+    if (bytes < 1024 * 1024) return Math.max(1, Math.round(bytes / 1024)) + ' KB';
+    return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+  }
+
+  function renderFileList() {
+    fileListEl.innerHTML = '';
+    if (selectedFiles.length === 0) {
+      fileListEl.hidden = true;
+      fileDrop.classList.remove('has-files');
+      return;
+    }
+    fileDrop.classList.add('has-files');
+    fileListEl.hidden = false;
+    selectedFiles.forEach(function (file, idx) {
+      var li = document.createElement('li');
+      li.innerHTML =
+        '<span class="f-icon">🎬</span>' +
+        '<span class="f-name"></span>' +
+        '<span class="f-size"></span>' +
+        '<button type="button" class="f-remove" aria-label="Verwijder">✕</button>';
+      li.querySelector('.f-name').textContent = file.name;
+      li.querySelector('.f-size').textContent = formatSize(file.size);
+      li.querySelector('.f-remove').addEventListener('click', function () {
+        selectedFiles.splice(idx, 1);
+        renderFileList();
+      });
+      fileListEl.appendChild(li);
+    });
+  }
+
+  fileInput.addEventListener('change', function () {
+    var incoming = Array.prototype.slice.call(fileInput.files || []);
+    incoming.forEach(function (f) { selectedFiles.push(f); });
+    fileInput.value = '';
+    fileError.hidden = true;
+    renderFileList();
+  });
+
+  function resetForm() {
+    selectedFiles = [];
+    nameInput.value = '';
+    renderFileList();
+    nameError.hidden = true;
+    fileError.hidden = true;
+    successCard.hidden = true;
+    uploadingCard.hidden = true;
+    errorCard.hidden = true;
+    formCard.hidden = false;
+    submitBtn.disabled = false;
+    submitBtn.textContent = 'Versturen';
+  }
+
+  function backToFormKeepingFiles() {
+    errorCard.hidden = true;
+    uploadingCard.hidden = true;
+    formCard.hidden = false;
+    submitBtn.disabled = false;
+    submitBtn.textContent = 'Versturen';
+  }
+
+  resetBtn.addEventListener('click', resetForm);
+  retryBtn.addEventListener('click', backToFormKeepingFiles);
+
+  form.addEventListener('submit', function (e) {
+    e.preventDefault();
+    var name = nameInput.value.trim();
+    var valid = true;
+
+    if (!name) {
+      nameError.hidden = false;
+      valid = false;
+    } else {
+      nameError.hidden = true;
+    }
+    if (selectedFiles.length === 0) {
+      fileError.hidden = false;
+      valid = false;
+    } else {
+      fileError.hidden = true;
+    }
+    if (!valid) return;
+
+    submitBtn.disabled = true;
+    formCard.hidden = true;
+    uploadingCard.hidden = false;
+
+    progressList.innerHTML = '';
+    var filesToUpload = selectedFiles.slice();
+    var rows = filesToUpload.map(function (file) {
+      var row = document.createElement('div');
+      row.className = 'progress-row';
+      row.innerHTML =
+        '<div class="p-top"><span class="p-name"></span><span class="p-pct">0%</span></div>' +
+        '<div class="progress-track"><div class="progress-fill"></div></div>';
+      row.querySelector('.p-name').textContent = file.name;
+      progressList.appendChild(row);
+      return row;
+    });
+
+    var sessionId = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+
+    function setRowProgress(i, fraction) {
+      var pct = Math.round(fraction * 100);
+      rows[i].querySelector('.progress-fill').style.width = pct + '%';
+      rows[i].querySelector('.p-pct').textContent = pct + '%';
+    }
+
+    // One file at a time -- simpler and more reliable on a flaky mobile
+    // connection than firing them all off in parallel.
+    var results = [];
+    var chain = Promise.resolve();
+    filesToUpload.forEach(function (file, i) {
+      chain = chain.then(function () {
+        return uploadOneFile(file, name, sessionId, i, function (fraction) {
+          setRowProgress(i, fraction);
+        });
+      }).then(function (result) {
+        results.push(result);
+      });
+    });
+
+    chain.then(function () {
+      showSuccess(name, results);
+    }).catch(function (err) {
+      showError(err && err.message ? err.message : 'Onbekende fout.');
+    });
+  });
+
+  function showSuccess(name, results) {
+    uploadingCard.hidden = true;
+    successCard.hidden = false;
+    var count = results.length;
+    var vidWord = count === 1 ? 'video is' : 'video’s zijn';
+    successBody.textContent = 'Bedankt ' + name + '! Je ' + vidWord + ' ontvangen. Joost en Jenneke gaan hier heel blij van worden.';
+
+    verifyRow.className = 'verify-row shown';
+    verifySpinner.hidden = false;
+    verifyIcon.hidden = true;
+    verifyText.textContent = 'We controleren of alles goed is opgeslagen…';
+
+    // Real check: ask the backend to re-read each file fresh from Drive
+    // and confirm its size matches what was sent, instead of just
+    // trusting that the finalize call returned ok.
+    Promise.all(results.map(function (r) {
+      return postJson({ action: 'verify', fileId: r.fileId, expectedSize: r.size })
+        .then(function (resp) { return !!(resp && resp.ok); })
+        .catch(function () { return false; });
+    })).then(function (checks) {
+      var allOk = checks.every(Boolean);
+      verifySpinner.hidden = true;
+      verifyIcon.hidden = false;
+      if (allOk) {
+        verifyRow.className = 'verify-row shown ok';
+        verifyIcon.className = 'v-icon ok';
+        verifyIcon.textContent = '✓';
+        verifyText.textContent = count === 1
+          ? 'Gecontroleerd — je video staat veilig in het album.'
+          : 'Gecontroleerd — je video’s staan veilig in het album.';
+      } else {
+        verifyRow.className = 'verify-row shown fail';
+        verifyIcon.className = 'v-icon fail';
+        verifyIcon.textContent = '!';
+        verifyText.textContent = 'Kon niet bevestigen, maar je upload is waarschijnlijk toch gelukt.';
+      }
+    });
+  }
+
+  function showError(message) {
+    uploadingCard.hidden = true;
+    errorCard.hidden = false;
+    errorBody.textContent = 'Er ging iets mis bij het versturen (' + message + '). Probeer het nog eens — je naam en video’s staan nog klaar.';
+  }
+})();
+</script>
+</body>
+</html>
