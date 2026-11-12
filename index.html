@@ -367,7 +367,7 @@ footer p { margin: 0; font-size: 12.5px; color: var(--muted); line-height: 1.6; 
 
   // ---- Backend config -------------------------------------------------
   var SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbyXQDVmgC9OkS1wXp0mC7c3uPGdHypcN6yGZc_-LVSS_fIpnWhHsbi1w8xBK-aAgs7FZw/exec';
-  var CHUNK_SIZE = 3 * 1024 * 1024; // 3MB raw per chunk -- safely under Apps Script's request-size limit once base64-encoded
+  var CHUNK_SIZE = 8 * 1024 * 1024; // 8MB raw per chunk (~11MB base64-encoded) -- every chunk costs a full Apps Script execution's worth of fixed overhead, so fewer/bigger chunks is a lot faster overall; still comfortably under Apps Script's request-size limit
 
   // Mobile browsers routinely suspend a backgrounded tab's network activity,
   // which kills an in-progress request with a generic network error --
