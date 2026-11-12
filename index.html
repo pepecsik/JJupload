@@ -378,30 +378,23 @@ footer p { margin: 0; font-size: 12.5px; color: var(--muted); line-height: 1.6; 
     if (document.hidden) wasBackgrounded = true;
   });
 
-  // XHR instead of fetch() specifically so onUploadProgress can report real,
-  // continuous progress WHILE a chunk is still transferring -- fetch only
-  // ever resolves once the whole round trip is done, which is exactly why
-  // the bar used to sit still for the entire length of a slow chunk upload
-  // and look frozen on a weak mobile connection.
-  function postJson(payload, onUploadProgress, attemptsLeft) {
+  // Plain XHR with no listener on xhr.upload at all -- NOT a style choice.
+  // Attaching ANY handler to xhr.upload (e.g. onprogress, for a smooth
+  // mid-chunk progress bar) makes the browser preflight the request
+  // regardless of headers used, per the XHR/Fetch spec's definition of a
+  // "simple" cross-origin request. Apps Script's /exec endpoint redirects
+  // to a different googleusercontent.com origin that never answers that
+  // preflight with CORS headers, so a request carrying an upload listener
+  // is permanently blocked cross-origin -- confirmed live (two separate
+  // "blocked by CORS policy" console traces, one before and one after
+  // removing the explicit Content-Type header, which ruled that part out).
+  // Progress only updates at whole-chunk boundaries as a result -- less
+  // smooth, but the alternative doesn't work at all from a different origin.
+  function postJson(payload, attemptsLeft) {
     attemptsLeft = attemptsLeft == null ? 5 : attemptsLeft;
     return new Promise(function (resolve, reject) {
       var xhr = new XMLHttpRequest();
       xhr.open('POST', SCRIPT_URL, true);
-      // Deliberately NOT calling setRequestHeader('Content-Type', ...) --
-      // XHR defaults a string body to text/plain;charset=UTF-8 on its own,
-      // same effective value, but explicitly setting it here was observed
-      // to make the browser preflight the request (OPTIONS), which Apps
-      // Script's own redirect chain (the /exec URL 302s to a different
-      // googleusercontent.com origin) doesn't answer with CORS headers --
-      // confirmed live via a real "blocked by CORS policy" console error
-      // on Android Chrome. Leaving the header to the browser's own default
-      // keeps the request in the no-preflight "simple request" path.
-      if (onUploadProgress) {
-        xhr.upload.onprogress = function (e) {
-          if (e.lengthComputable) onUploadProgress(e.loaded / e.total);
-        };
-      }
       xhr.onload = function () {
         if (xhr.status < 200 || xhr.status >= 300) { reject(new Error('HTTP ' + xhr.status)); return; }
         try { resolve(JSON.parse(xhr.responseText)); }
@@ -414,7 +407,7 @@ footer p { margin: 0; font-size: 12.5px; color: var(--muted); line-height: 1.6; 
         var retryNumber = 5 - attemptsLeft + 1; // 1st retry, 2nd retry, ...
         var delay = Math.min(6400, 400 * Math.pow(2, retryNumber));
         return new Promise(function (resolve) { setTimeout(resolve, delay); })
-          .then(function () { return postJson(payload, onUploadProgress, attemptsLeft - 1); });
+          .then(function () { return postJson(payload, attemptsLeft - 1); });
       }
       throw err;
     });
@@ -445,8 +438,9 @@ footer p { margin: 0; font-size: 12.5px; color: var(--muted); line-height: 1.6; 
   // Starts at startChunkIndex (not always 0) so a retry can resume instead
   // of resending chunks the server already has. onChunkDone(newIndex) lets
   // the caller persist progress as each chunk actually lands. onProgress
-  // gets a smooth 0..1 fraction, updated continuously mid-chunk too (via
-  // the XHR upload progress event), not just once per completed chunk.
+  // gets a 0..1 fraction once per completed chunk (not mid-chunk -- see
+  // postJson's comment on why an upload-progress listener can't be used
+  // cross-origin against Apps Script at all).
   function uploadOneFile(file, uploaderName, sessionId, fileIndex, startChunkIndex, onProgress, onChunkDone) {
     var totalChunks = Math.max(1, Math.ceil(file.size / CHUNK_SIZE));
     var chunkIndex = startChunkIndex || 0;
@@ -457,7 +451,7 @@ footer p { margin: 0; font-size: 12.5px; color: var(--muted); line-height: 1.6; 
           action: 'finalize', sessionId: sessionId, fileIndex: fileIndex,
           uploaderName: uploaderName, fileName: file.name,
           mimeType: file.type || 'video/mp4', totalChunks: totalChunks,
-        }, null).then(function (resp) {
+        }).then(function (resp) {
           if (!resp || !resp.ok) throw new Error((resp && resp.error) || 'Samenvoegen mislukt');
           return { fileId: resp.fileId, size: resp.size, fileName: file.name };
         });
@@ -469,8 +463,6 @@ footer p { margin: 0; font-size: 12.5px; color: var(--muted); line-height: 1.6; 
           action: 'chunk', sessionId: sessionId, fileIndex: fileIndex,
           chunkIndex: chunkIndex, totalChunks: totalChunks,
           data: base64,
-        }, function (subFraction) {
-          onProgress((chunkIndex + subFraction) / totalChunks);
         });
       }).then(function (resp) {
         if (!resp || !resp.ok) throw new Error((resp && resp.error) || 'Versturen van een deel mislukt');
