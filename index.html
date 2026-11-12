@@ -388,9 +388,15 @@ footer p { margin: 0; font-size: 12.5px; color: var(--muted); line-height: 1.6; 
     return new Promise(function (resolve, reject) {
       var xhr = new XMLHttpRequest();
       xhr.open('POST', SCRIPT_URL, true);
-      // text/plain (not application/json) so the browser never sends a
-      // CORS preflight -- Apps Script web apps can't answer one.
-      xhr.setRequestHeader('Content-Type', 'text/plain;charset=utf-8');
+      // Deliberately NOT calling setRequestHeader('Content-Type', ...) --
+      // XHR defaults a string body to text/plain;charset=UTF-8 on its own,
+      // same effective value, but explicitly setting it here was observed
+      // to make the browser preflight the request (OPTIONS), which Apps
+      // Script's own redirect chain (the /exec URL 302s to a different
+      // googleusercontent.com origin) doesn't answer with CORS headers --
+      // confirmed live via a real "blocked by CORS policy" console error
+      // on Android Chrome. Leaving the header to the browser's own default
+      // keeps the request in the no-preflight "simple request" path.
       if (onUploadProgress) {
         xhr.upload.onprogress = function (e) {
           if (e.lengthComputable) onUploadProgress(e.loaded / e.total);
