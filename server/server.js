@@ -18,6 +18,7 @@ const cors = require("cors");
 const multer = require("multer");
 const os = require("os");
 const fs = require("fs");
+const nodemailer = require("nodemailer");
 const { google } = require("googleapis");
 
 const PORT = process.env.PORT || 3000;
@@ -26,6 +27,11 @@ const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN || "https://pepecsik.github.io
 const CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
 const CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
 const REFRESH_TOKEN = process.env.GOOGLE_REFRESH_TOKEN;
+// Email notification on every upload -- all three optional; if any are
+// missing, notification is silently skipped (never blocks the upload).
+const GMAIL_USER = process.env.GMAIL_USER;
+const GMAIL_APP_PASSWORD = process.env.GMAIL_APP_PASSWORD;
+const NOTIFY_EMAIL = process.env.NOTIFY_EMAIL;
 
 if (!FOLDER_ID) {
   console.error("Missing DRIVE_FOLDER_ID environment variable.");
@@ -39,6 +45,28 @@ if (!CLIENT_ID || !CLIENT_SECRET || !REFRESH_TOKEN) {
 const oauth2Client = new google.auth.OAuth2(CLIENT_ID, CLIENT_SECRET);
 oauth2Client.setCredentials({ refresh_token: REFRESH_TOKEN });
 const drive = google.drive({ version: "v3", auth: oauth2Client });
+
+const mailer =
+  GMAIL_USER && GMAIL_APP_PASSWORD
+    ? nodemailer.createTransport({ service: "gmail", auth: { user: GMAIL_USER, pass: GMAIL_APP_PASSWORD } })
+    : null;
+
+async function notifyNewUpload(uploaderName, fileName, fileId, size) {
+  if (!mailer || !NOTIFY_EMAIL) return;
+  try {
+    const mb = (size / (1024 * 1024)).toFixed(1);
+    const link = `https://drive.google.com/file/d/${fileId}/view`;
+    await mailer.sendMail({
+      from: GMAIL_USER,
+      to: NOTIFY_EMAIL,
+      subject: `Nieuwe video van ${uploaderName || "iemand"} — JJupload`,
+      text: `${uploaderName || "Iemand"} heeft een video (${mb} MB) geüpload.\n\nBestand: ${fileName}\nBekijken: ${link}`,
+    });
+  } catch (err) {
+    // A failed notification should never fail the upload itself.
+    console.error("notify email failed:", err);
+  }
+}
 
 const app = express();
 app.use(cors({ origin: ALLOWED_ORIGIN }));
@@ -72,6 +100,8 @@ app.post("/upload", upload.single("video"), async (req, res) => {
       media: { mimeType: req.file.mimetype || "video/mp4", body: fs.createReadStream(tempPath) },
       fields: "id, size",
     });
+
+    notifyNewUpload(uploaderName, fileName, driveRes.data.id, Number(driveRes.data.size));
 
     res.json({ ok: true, fileId: driveRes.data.id, size: Number(driveRes.data.size) });
   } catch (err) {
