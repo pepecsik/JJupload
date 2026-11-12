@@ -351,23 +351,19 @@ footer p { margin: 0; font-size: 12.5px; color: var(--muted); line-height: 1.6; 
 
   var selectedFiles = [];
 
-  // Resume state for the current batch of selectedFiles: uploadState[i] is
-  // { chunkIndex, result } -- how far file i got last time, and its final
-  // {fileId, size} once finalized. Persists across a failed attempt and a
-  // "Probeer opnieuw" so a retry picks up where it left off instead of
-  // resending everything -- the whole point, since boomers hitting retry
-  // need the SECOND attempt to be fast, not another full multi-minute wait.
-  // Reset (along with sessionId) whenever the actual file selection changes.
-  var sessionId = null;
-  var uploadState = [];
-  function resetUploadState() {
-    sessionId = null;
-    uploadState = [];
+  // Per-file result cache for the current selectedFiles batch: uploadResults[i]
+  // is the {fileId, size, fileName} of a file already successfully uploaded
+  // on a PREVIOUS attempt. Lets "Probeer opnieuw" skip files that already
+  // made it through instead of re-sending everything. Reset whenever the
+  // actual file selection changes.
+  var uploadResults = [];
+  function resetUploadResults() {
+    uploadResults = [];
   }
 
   // ---- Backend config -------------------------------------------------
-  var SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbyXQDVmgC9OkS1wXp0mC7c3uPGdHypcN6yGZc_-LVSS_fIpnWhHsbi1w8xBK-aAgs7FZw/exec';
-  var CHUNK_SIZE = 20 * 1024 * 1024; // 20MB raw per chunk (~27MB base64-encoded) -- most short clips now fit in 1-2 Apps Script calls instead of many. If uploads start failing with a "too large" error, that's telling us the real ceiling -- dial this back down.
+  // Paste the deployed Render server's URL here (no trailing slash).
+  var SERVER_URL = 'PASTE_YOUR_RENDER_SERVER_URL_HERE';
 
   // Mobile browsers routinely suspend a backgrounded tab's network activity,
   // which kills an in-progress request with a generic network error --
@@ -378,101 +374,39 @@ footer p { margin: 0; font-size: 12.5px; color: var(--muted); line-height: 1.6; 
     if (document.hidden) wasBackgrounded = true;
   });
 
-  // Plain XHR with no listener on xhr.upload at all -- NOT a style choice.
-  // Attaching ANY handler to xhr.upload (e.g. onprogress, for a smooth
-  // mid-chunk progress bar) makes the browser preflight the request
-  // regardless of headers used, per the XHR/Fetch spec's definition of a
-  // "simple" cross-origin request. Apps Script's /exec endpoint redirects
-  // to a different googleusercontent.com origin that never answers that
-  // preflight with CORS headers, so a request carrying an upload listener
-  // is permanently blocked cross-origin -- confirmed live (two separate
-  // "blocked by CORS policy" console traces, one before and one after
-  // removing the explicit Content-Type header, which ruled that part out).
-  // Progress only updates at whole-chunk boundaries as a result -- less
-  // smooth, but the alternative doesn't work at all from a different origin.
-  function postJson(payload, attemptsLeft) {
-    attemptsLeft = attemptsLeft == null ? 5 : attemptsLeft;
+  // Uploads the whole file in one real streamed request (this is our own
+  // server, not Apps Script, so an xhr.upload listener is safe here -- no
+  // CORS preflight trap, and the server answers OPTIONS correctly). That
+  // means real, continuous upload progress, and no chunking needed at all.
+  function uploadOneFile(file, uploaderName, onProgress) {
     return new Promise(function (resolve, reject) {
       var xhr = new XMLHttpRequest();
-      xhr.open('POST', SCRIPT_URL, true);
+      xhr.open('POST', SERVER_URL + '/upload', true);
+      xhr.upload.onprogress = function (e) {
+        if (e.lengthComputable) onProgress(e.loaded / e.total);
+      };
       xhr.onload = function () {
         if (xhr.status < 200 || xhr.status >= 300) { reject(new Error('HTTP ' + xhr.status)); return; }
-        try { resolve(JSON.parse(xhr.responseText)); }
-        catch (err) { reject(new Error('Ongeldig antwoord van de server')); }
+        try {
+          var resp = JSON.parse(xhr.responseText);
+          if (!resp || !resp.ok) { reject(new Error((resp && resp.error) || 'Upload mislukt')); return; }
+          resolve({ fileId: resp.fileId, size: resp.size, fileName: file.name });
+        } catch (err) { reject(new Error('Ongeldig antwoord van de server')); }
       };
       xhr.onerror = function () { reject(new Error('Netwerkfout')); };
-      xhr.send(JSON.stringify(payload));
-    }).catch(function (err) {
-      if (attemptsLeft > 1) {
-        var retryNumber = 5 - attemptsLeft + 1; // 1st retry, 2nd retry, ...
-        var delay = Math.min(6400, 400 * Math.pow(2, retryNumber));
-        return new Promise(function (resolve) { setTimeout(resolve, delay); })
-          .then(function () { return postJson(payload, attemptsLeft - 1); });
-      }
-      throw err;
+      var fd = new FormData();
+      fd.append('name', uploaderName);
+      fd.append('video', file, file.name);
+      xhr.send(fd);
     });
   }
 
-  // Reads a slice of the file and returns it already base64-encoded, using
-  // the browser's own native data-URL encoder (readAsDataURL) rather than
-  // a hand-rolled String.fromCharCode.apply() over the raw bytes. That
-  // manual approach has a real stack-size limit on some browsers -- most
-  // notably iOS Safari, which a lot of this page's actual users are on --
-  // and throws immediately rather than sending anything, which looks
-  // exactly like "stuck at 0%, fails right away" with no network activity
-  // at all. readAsDataURL has no such limit at any practical file size.
-  function readSliceAsBase64(file, start, end) {
-    return new Promise(function (resolve, reject) {
-      var reader = new FileReader();
-      reader.onload = function () {
-        var result = reader.result || '';
-        var comma = result.indexOf(',');
-        resolve(comma >= 0 ? result.slice(comma + 1) : result);
-      };
-      reader.onerror = function () { reject(new Error('Kan bestand niet lezen')); };
-      reader.readAsDataURL(file.slice(start, end));
-    });
-  }
-
-  // Uploads one file in sequential chunks, then finalizes it server-side.
-  // Starts at startChunkIndex (not always 0) so a retry can resume instead
-  // of resending chunks the server already has. onChunkDone(newIndex) lets
-  // the caller persist progress as each chunk actually lands. onProgress
-  // gets a 0..1 fraction once per completed chunk (not mid-chunk -- see
-  // postJson's comment on why an upload-progress listener can't be used
-  // cross-origin against Apps Script at all).
-  function uploadOneFile(file, uploaderName, sessionId, fileIndex, startChunkIndex, onProgress, onChunkDone) {
-    var totalChunks = Math.max(1, Math.ceil(file.size / CHUNK_SIZE));
-    var chunkIndex = startChunkIndex || 0;
-
-    function sendNext() {
-      if (chunkIndex >= totalChunks) {
-        return postJson({
-          action: 'finalize', sessionId: sessionId, fileIndex: fileIndex,
-          uploaderName: uploaderName, fileName: file.name,
-          mimeType: file.type || 'video/mp4', totalChunks: totalChunks,
-        }).then(function (resp) {
-          if (!resp || !resp.ok) throw new Error((resp && resp.error) || 'Samenvoegen mislukt');
-          return { fileId: resp.fileId, size: resp.size, fileName: file.name };
-        });
-      }
-      var start = chunkIndex * CHUNK_SIZE;
-      var end = Math.min(file.size, start + CHUNK_SIZE);
-      return readSliceAsBase64(file, start, end).then(function (base64) {
-        return postJson({
-          action: 'chunk', sessionId: sessionId, fileIndex: fileIndex,
-          chunkIndex: chunkIndex, totalChunks: totalChunks,
-          data: base64,
-        });
-      }).then(function (resp) {
-        if (!resp || !resp.ok) throw new Error((resp && resp.error) || 'Versturen van een deel mislukt');
-        chunkIndex++;
-        onProgress(chunkIndex / totalChunks);
-        if (onChunkDone) onChunkDone(chunkIndex);
-        return sendNext();
-      });
-    }
-    return sendNext();
+  function verifyFile(fileId, expectedSize) {
+    var url = SERVER_URL + '/verify?fileId=' + encodeURIComponent(fileId) + '&expectedSize=' + encodeURIComponent(expectedSize);
+    return fetch(url)
+      .then(function (res) { return res.json(); })
+      .then(function (resp) { return !!(resp && resp.ok); })
+      .catch(function () { return false; });
   }
 
   function formatSize(bytes) {
@@ -500,7 +434,7 @@ footer p { margin: 0; font-size: 12.5px; color: var(--muted); line-height: 1.6; 
       li.querySelector('.f-size').textContent = formatSize(file.size);
       li.querySelector('.f-remove').addEventListener('click', function () {
         selectedFiles.splice(idx, 1);
-        resetUploadState(); // indices shifted -- any previous resume progress no longer matches
+        resetUploadResults(); // indices shifted -- any previous results no longer match
         renderFileList();
       });
       fileListEl.appendChild(li);
@@ -512,13 +446,13 @@ footer p { margin: 0; font-size: 12.5px; color: var(--muted); line-height: 1.6; 
     incoming.forEach(function (f) { selectedFiles.push(f); });
     fileInput.value = '';
     fileError.hidden = true;
-    resetUploadState(); // file selection changed -- any previous resume progress no longer applies
+    resetUploadResults(); // file selection changed -- any previous results no longer apply
     renderFileList();
   });
 
   function resetForm() {
     selectedFiles = [];
-    resetUploadState();
+    resetUploadResults();
     nameInput.value = '';
     renderFileList();
     nameError.hidden = true;
@@ -566,14 +500,10 @@ footer p { margin: 0; font-size: 12.5px; color: var(--muted); line-height: 1.6; 
     uploadingCard.hidden = false;
     wasBackgrounded = false;
 
-    if (!sessionId) sessionId = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
-
     progressList.innerHTML = '';
     var filesToUpload = selectedFiles.slice();
     var rows = filesToUpload.map(function (file, i) {
-      var totalChunks = Math.max(1, Math.ceil(file.size / CHUNK_SIZE));
-      var state = uploadState[i];
-      var startPct = state ? Math.round(((state.chunkIndex || 0) / totalChunks) * 100) : 0;
+      var startPct = (uploadResults[i] ? 100 : 0);
       var row = document.createElement('div');
       row.className = 'progress-row';
       row.innerHTML =
@@ -590,25 +520,21 @@ footer p { margin: 0; font-size: 12.5px; color: var(--muted); line-height: 1.6; 
       rows[i].querySelector('.p-pct').textContent = pct + '%';
     }
 
-    // One file at a time -- simpler and more reliable on a flaky mobile
-    // connection than firing them all off in parallel. A file already
-    // finalized on a previous attempt (uploadState[i].result) is reused
-    // straight away instead of being sent again.
+    // One file at a time -- simpler and more predictable than firing them
+    // all off in parallel. A file already uploaded on a previous attempt
+    // is reused straight away instead of being sent again.
     var results = [];
     var chain = Promise.resolve();
     filesToUpload.forEach(function (file, i) {
       chain = chain.then(function () {
-        if (uploadState[i] && uploadState[i].result) {
+        if (uploadResults[i]) {
           setRowProgress(i, 1);
-          return uploadState[i].result;
+          return uploadResults[i];
         }
-        if (!uploadState[i]) uploadState[i] = { chunkIndex: 0, result: null };
-        return uploadOneFile(file, name, sessionId, i, uploadState[i].chunkIndex, function (fraction) {
+        return uploadOneFile(file, name, function (fraction) {
           setRowProgress(i, fraction);
-        }, function (newChunkIndex) {
-          uploadState[i].chunkIndex = newChunkIndex;
         }).then(function (result) {
-          uploadState[i].result = result;
+          uploadResults[i] = result;
           return result;
         });
       }).then(function (result) {
@@ -637,11 +563,9 @@ footer p { margin: 0; font-size: 12.5px; color: var(--muted); line-height: 1.6; 
 
     // Real check: ask the backend to re-read each file fresh from Drive
     // and confirm its size matches what was sent, instead of just
-    // trusting that the finalize call returned ok.
+    // trusting that the upload call returned ok.
     Promise.all(results.map(function (r) {
-      return postJson({ action: 'verify', fileId: r.fileId, expectedSize: r.size })
-        .then(function (resp) { return !!(resp && resp.ok); })
-        .catch(function () { return false; });
+      return verifyFile(r.fileId, r.size);
     })).then(function (checks) {
       var allOk = checks.every(Boolean);
       verifySpinner.hidden = true;
