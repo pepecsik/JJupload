@@ -75,7 +75,25 @@ body {
 
 /* Hero */
 .hero { text-align: center; display: flex; flex-direction: column; align-items: center; gap: 10px; }
-.frame-wrap { width: 148px; aspect-ratio: 3/4; margin-bottom: 4px; }
+.frame-wrap {
+  width: 170px;
+  aspect-ratio: 1459/2000; /* matches the photo's own proportions */
+  margin-bottom: 4px;
+  border-radius: 50%; /* ellipse, since the box isn't square */
+  overflow: hidden;
+  border: 3px solid var(--gold);
+  box-shadow: 0 0 0 1px var(--gold-soft) inset, 0 3px 14px rgba(0,0,0,0.18);
+}
+.frame-wrap img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  /* Scaled up a touch so the oval crop bites into the photo itself
+     rather than risking a sliver of the old grey mat showing at the
+     very edge of the ellipse. */
+  transform: scale(1.14);
+}
 .eyebrow {
   margin: 0;
   font-size: 12px;
@@ -236,13 +254,8 @@ footer p { margin: 0; font-size: 12.5px; color: var(--muted); line-height: 1.6; 
 
 <div class="page">
   <header class="hero">
-    <div class="frame-wrap" aria-hidden="true">
-      <svg viewBox="0 0 150 200" width="100%" height="100%" role="img" aria-label="Plek voor een foto van Joost en Jenneke">
-        <rect x="4" y="4" width="142" height="192" rx="4" fill="var(--surface-2)" stroke="var(--gold)" stroke-width="2"/>
-        <rect x="14" y="14" width="122" height="172" rx="2" fill="none" stroke="var(--gold-soft)" stroke-width="1"/>
-        <text x="75" y="98" text-anchor="middle" font-family="Playfair Display, Georgia, serif" font-style="italic" font-size="30" fill="var(--ruby)">J&amp;J</text>
-        <text x="75" y="160" text-anchor="middle" font-family="Inter, sans-serif" font-size="9.5" letter-spacing="0.5" fill="var(--muted)">FOTO VOLGT</text>
-      </svg>
+    <div class="frame-wrap">
+      <img src="photo.webp" alt="Joost en Jenneke op hun trouwdag">
     </div>
     <p class="eyebrow">Robijnen bruiloft</p>
     <h1>Joost <span class="amp">&amp;</span> Jenneke</h1>
