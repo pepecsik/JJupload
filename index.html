@@ -367,7 +367,7 @@ footer p { margin: 0; font-size: 12.5px; color: var(--muted); line-height: 1.6; 
 
   // ---- Backend config -------------------------------------------------
   var SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbyXQDVmgC9OkS1wXp0mC7c3uPGdHypcN6yGZc_-LVSS_fIpnWhHsbi1w8xBK-aAgs7FZw/exec';
-  var CHUNK_SIZE = 8 * 1024 * 1024; // 8MB raw per chunk (~11MB base64-encoded) -- every chunk costs a full Apps Script execution's worth of fixed overhead, so fewer/bigger chunks is a lot faster overall; still comfortably under Apps Script's request-size limit
+  var CHUNK_SIZE = 20 * 1024 * 1024; // 20MB raw per chunk (~27MB base64-encoded) -- most short clips now fit in 1-2 Apps Script calls instead of many. If uploads start failing with a "too large" error, that's telling us the real ceiling -- dial this back down.
 
   // Mobile browsers routinely suspend a backgrounded tab's network activity,
   // which kills an in-progress request with a generic network error --
