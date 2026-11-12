@@ -2,8 +2,16 @@
 // server has no per-call execution overhead (unlike Apps Script, which
 // spins up a fresh execution for every single request), so a video goes
 // straight to Drive in one real streamed upload instead of many small
-// base64-encoded chunks. Authenticates as a Google service account, so
-// guests never sign in to anything.
+// base64-encoded chunks.
+//
+// Authenticates as the organizer's OWN Google account via a stored OAuth
+// refresh token -- NOT a service account. Service accounts have zero
+// personal Drive storage quota of their own, so creating a file as one
+// always fails with storageQuotaExceeded on a regular (non-Workspace)
+// personal Gmail Drive -- confirmed live. Using the organizer's own
+// refresh token means uploads count against their real quota, while
+// guests still never see a login screen (the authorization happened once,
+// by the organizer, when this refresh token was generated).
 
 const express = require("express");
 const cors = require("cors");
@@ -15,25 +23,22 @@ const { google } = require("googleapis");
 const PORT = process.env.PORT || 3000;
 const FOLDER_ID = process.env.DRIVE_FOLDER_ID;
 const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN || "https://pepecsik.github.io";
+const CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
+const CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
+const REFRESH_TOKEN = process.env.GOOGLE_REFRESH_TOKEN;
 
 if (!FOLDER_ID) {
   console.error("Missing DRIVE_FOLDER_ID environment variable.");
   process.exit(1);
 }
-
-let credentials;
-try {
-  credentials = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_KEY || "");
-} catch (err) {
-  console.error("Missing or invalid GOOGLE_SERVICE_ACCOUNT_KEY environment variable (must be the full JSON key).");
+if (!CLIENT_ID || !CLIENT_SECRET || !REFRESH_TOKEN) {
+  console.error("Missing GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET / GOOGLE_REFRESH_TOKEN environment variable(s).");
   process.exit(1);
 }
 
-const auth = new google.auth.GoogleAuth({
-  credentials,
-  scopes: ["https://www.googleapis.com/auth/drive"],
-});
-const drive = google.drive({ version: "v3", auth });
+const oauth2Client = new google.auth.OAuth2(CLIENT_ID, CLIENT_SECRET);
+oauth2Client.setCredentials({ refresh_token: REFRESH_TOKEN });
+const drive = google.drive({ version: "v3", auth: oauth2Client });
 
 const app = express();
 app.use(cors({ origin: ALLOWED_ORIGIN }));
