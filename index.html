@@ -414,22 +414,24 @@ footer p { margin: 0; font-size: 12.5px; color: var(--muted); line-height: 1.6; 
     });
   }
 
-  function arrayBufferToBase64(buffer) {
-    var bytes = new Uint8Array(buffer);
-    var binary = '';
-    var step = 0x8000;
-    for (var i = 0; i < bytes.length; i += step) {
-      binary += String.fromCharCode.apply(null, bytes.subarray(i, i + step));
-    }
-    return btoa(binary);
-  }
-
-  function readSlice(file, start, end) {
+  // Reads a slice of the file and returns it already base64-encoded, using
+  // the browser's own native data-URL encoder (readAsDataURL) rather than
+  // a hand-rolled String.fromCharCode.apply() over the raw bytes. That
+  // manual approach has a real stack-size limit on some browsers -- most
+  // notably iOS Safari, which a lot of this page's actual users are on --
+  // and throws immediately rather than sending anything, which looks
+  // exactly like "stuck at 0%, fails right away" with no network activity
+  // at all. readAsDataURL has no such limit at any practical file size.
+  function readSliceAsBase64(file, start, end) {
     return new Promise(function (resolve, reject) {
       var reader = new FileReader();
-      reader.onload = function () { resolve(reader.result); };
+      reader.onload = function () {
+        var result = reader.result || '';
+        var comma = result.indexOf(',');
+        resolve(comma >= 0 ? result.slice(comma + 1) : result);
+      };
       reader.onerror = function () { reject(new Error('Kan bestand niet lezen')); };
-      reader.readAsArrayBuffer(file.slice(start, end));
+      reader.readAsDataURL(file.slice(start, end));
     });
   }
 
@@ -456,11 +458,11 @@ footer p { margin: 0; font-size: 12.5px; color: var(--muted); line-height: 1.6; 
       }
       var start = chunkIndex * CHUNK_SIZE;
       var end = Math.min(file.size, start + CHUNK_SIZE);
-      return readSlice(file, start, end).then(function (buffer) {
+      return readSliceAsBase64(file, start, end).then(function (base64) {
         return postJson({
           action: 'chunk', sessionId: sessionId, fileIndex: fileIndex,
           chunkIndex: chunkIndex, totalChunks: totalChunks,
-          data: arrayBufferToBase64(buffer),
+          data: base64,
         }, function (subFraction) {
           onProgress((chunkIndex + subFraction) / totalChunks);
         });
